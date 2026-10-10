@@ -125,7 +125,7 @@ st.caption("Compare expected and processed payroll, investigate exceptions, and 
 st.warning("Demo / Portfolio Application — Please use fictional or sample payroll data only. "
     "Do not upload real employee, personal, confidential, or company payroll information.")
 
-st.markdown("*Developed by CH.NVS.Sindu | Payroll Reconciliation Portfolio Project*")
+st.markdown("*Developed by Sindu | Payroll Reconciliation Portfolio Project*")
 
 with st.expander("Required file format"):
     st.write("Both files should contain Employee ID, Employee Name, and the payroll fields you want to compare.")
