@@ -230,20 +230,20 @@ if expected_file and processed_file:
     st.subheader("Reconciliation results")
     st.caption("Expected and processed values remain side by side.")
     st.dataframe(result, use_container_width=True, hide_index=True)
-  
-    matched_count = (result["Overall Status"] == "Matched").sum()
-   difference_count = (result["Overall Status"] == "Exception").sum()
+        
+        matched_count = (result["Overall Status"] == "Matched").sum()
+    difference_count = (result["Overall Status"] == "Exception").sum()
 
-   st.subheader("Quick reconciliation summary")
+    st.subheader("Quick reconciliation summary")
 
-   s1, s2 = st.columns(2)
+    s1, s2 = st.columns(2)
 
-   with s1:
-    st.metric("✅ Matched", int(matched_count))
+    with s1:
+        st.metric("✅ Matched", int(matched_count))
 
-   with s2:
-    st.metric("⚠️ Differences", int(difference_count))
-   
+    with s2:
+        st.metric("⚠️ Differences", int(difference_count))
+    
     st.subheader("Exceptions and investigation")
     exceptions = result[result["Overall Status"] == "Exception"].copy()
 
