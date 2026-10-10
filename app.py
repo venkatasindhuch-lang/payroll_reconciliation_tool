@@ -132,6 +132,45 @@ with st.expander("Required file format"):
 
 payroll_period = st.text_input("Payroll period", placeholder="Example: September 2026")
 
+st.subheader("🧪 Try the Demo")
+
+st.write(
+    "Download the two fictional sample payroll files below, "
+    "then upload them into the Expected and Processed payroll sections."
+)
+
+demo1, demo2 = st.columns(2)
+
+with demo1:
+    with open("expected_payroll_demo.xlsx", "rb") as file:
+        st.download_button(
+            "📥 Download Expected Demo",
+            file,
+            file_name="expected_payroll_demo.xlsx"
+        )
+
+with demo2:
+    with open("processed_payroll_demo.xlsx", "rb") as file:
+        st.download_button(
+            "📥 Download Processed Demo",
+            file,
+            file_name="processed_payroll_demo.xlsx"
+        )
+
+st.info(
+    "Demo data is fictional. Do not upload real employee or payroll information."
+)
+with st.expander("📘 How to use this app"):
+    st.write("""
+    1. Download the Expected Payroll Demo file.
+    2. Download the Processed Payroll Demo file.
+    3. Upload both files below.
+    4. Choose the allowed difference.
+    5. Run the reconciliation.
+    6. Review matched records and payroll exceptions.
+    7. Download the reconciliation results.
+    """)
+    
 c1, c2 = st.columns(2)
 with c1:
     expected_file = st.file_uploader("1. Expected payroll file", type=["csv", "xlsx", "xls"], key="expected")
