@@ -1,5 +1,11 @@
 # Payroll Reconciliation Checker
+## Live Demo
 
+🔗 [Open the Payroll Reconciliation Checker](https://smart-payroll-reconciliation.streamlit.app)
+
+*Demo only:* Please use fictional or sample payroll data. Do not upload real employee or confidential payroll information.
+
+*Developed by Sindhu | Payroll Reconciliation Portfolio Project*
 A simple payroll reconciliation web app built with **Python, Pandas and Streamlit**.
 
 It compares an **expected payroll file** with a **processed payroll file** and highlights:
