@@ -5,19 +5,34 @@ import streamlit as st
 
 st.set_page_config(page_title="Payroll Reconciliation Checker", page_icon="favicon.svg", layout="wide")
 st.markdown("""
-<div style="
-    width:90px;
-    height:90px;
-    border-radius:22px;
-    background:linear-gradient(135deg,#35c7ff,#7c4dff,#ff2e9f);
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:45px;
-    margin-bottom:18px;
-">
-    🧾
-</div>
+<svg width="100" height="100" viewBox="0 0 64 64"
+     xmlns="http://www.w3.org/2000/svg"
+     style="display:block; margin-bottom:20px;">
+
+    <defs>
+        <linearGradient id="payrollGradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#35C7FF"/>
+            <stop offset="50%" stop-color="#7C4DFF"/>
+            <stop offset="100%" stop-color="#FF2E9F"/>
+        </linearGradient>
+    </defs>
+
+    <rect x="4" y="4" width="56" height="56"
+          rx="15" fill="url(#payrollGradient)"/>
+
+    <rect x="14" y="13" width="27" height="34"
+          rx="4" fill="none" stroke="white" stroke-width="4"/>
+
+    <path d="M20 21h15 M20 29h4 M31 29h4 M20 37h4 M31 37h4"
+          stroke="white" stroke-width="3" stroke-linecap="round"/>
+
+    <ellipse cx="46" cy="40" rx="8" ry="4"
+             fill="none" stroke="white" stroke-width="3"/>
+
+    <path d="M38 40v8c0 2.2 3.6 4 8 4s8-1.8 8-4v-8"
+          fill="none" stroke="white" stroke-width="3"/>
+
+</svg>
 """, unsafe_allow_html=True)
 
 st.markdown("""
