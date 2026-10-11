@@ -122,11 +122,38 @@ def to_excel_bytes(full_df, exceptions_df, controls_df):
     return output.getvalue()
 
 st.title("Payroll Reconciliation Checker")
-st.caption("Compare expected and processed payroll, investigate exceptions, and export the results.")
-st.warning("Demo / Portfolio Application — Please use fictional or sample payroll data only. "
-    "Do not upload real employee, personal, confidential, or company payroll information.")
 
-st.markdown("*Developed by Sindu | Payroll Reconciliation Portfolio Project*")
+st.markdown("**Developed by Sindu | Payroll Reconciliation Checker**")
+
+st.markdown("""
+### Smarter payroll comparison and exception review
+
+The **Payroll Reconciliation Checker** compares an **Expected Payroll** file
+with a **Processed Payroll** file and presents the values side by side.
+
+It helps identify differences across key payroll fields such as:
+
+- Gross Pay
+- PAYE
+- Employee NI
+- Pension
+- Other Deductions
+- Net Pay
+
+The tool is designed to make payroll reconciliation easier to review,
+highlight exceptions quickly, and support investigation before payroll
+results are finalised.
+""")
+
+st.info(
+    "💡 How it works: Download the demo files → Upload Expected Payroll and "
+    "Processed Payroll → Review the comparison → Investigate exceptions."
+)
+
+st.warning(
+    "⚠️ Demo use only: Please use fictional or sample payroll data. "
+    "Do not upload real employee, banking, tax, confidential, or company payroll information."
+)
 
 with st.expander("Required file format"):
     st.write("Both files should contain Employee ID, Employee Name, and the payroll fields you want to compare.")
