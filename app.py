@@ -5,6 +5,55 @@ import streamlit as st
 
 st.set_page_config(page_title="Payroll Reconciliation Checker", page_icon="favicon.svg", layout="wide")
 st.image("favicon.svg",width=90)
+st.markdown("""
+<style>
+
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 4rem;
+    max-width: 1200px;
+}
+
+h1 {
+    color: #0A214A;
+    font-weight: 800;
+}
+
+h2, h3 {
+    color: #173A63;
+    font-weight: 700;
+}
+
+div[data-testid="stAlert"] {
+    border-radius: 14px;
+}
+
+div[data-testid="stFileUploader"] {
+    background: #F8FAFC;
+    border-radius: 14px;
+    padding: 10px;
+}
+
+.stButton > button,
+.stDownloadButton > button {
+    border-radius: 10px;
+    font-weight: 600;
+    min-height: 44px;
+}
+
+div[data-testid="stDataFrame"] {
+    border: 1px solid #E4E7EC;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+div[data-testid="stExpander"] {
+    border-radius: 12px;
+    border: 1px solid #E4E7EC;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 DEFAULT_FIELDS = ["Gross Pay", "PAYE", "Employee NI", "Pension", "Other Deductions", "Net Pay"]
 REQUIRED_KEYS = ["Employee ID", "Employee Name"]
