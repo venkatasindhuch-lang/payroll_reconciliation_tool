@@ -4,7 +4,22 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Payroll Reconciliation Checker", page_icon="favicon.svg", layout="wide")
-st.image("favicon.svg",width=90)
+st.markdown("""
+<div style="
+    width:90px;
+    height:90px;
+    border-radius:22px;
+    background:linear-gradient(135deg,#35c7ff,#7c4dff,#ff2e9f);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:45px;
+    margin-bottom:18px;
+">
+    🧾
+</div>
+""", unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 
