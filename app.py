@@ -3,7 +3,8 @@ import io
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Payroll Reconciliation Checker", page_icon="💷", layout="wide")
+st.set_page_config(page_title="Payroll Reconciliation Checker", page_icon="favicon.svg", layout="wide")
+st.image("favicon.svg",width=90)
 
 DEFAULT_FIELDS = ["Gross Pay", "PAYE", "Employee NI", "Pension", "Other Deductions", "Net Pay"]
 REQUIRED_KEYS = ["Employee ID", "Employee Name"]
