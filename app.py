@@ -113,6 +113,7 @@ with col1:
     )
 
 with col2:
+with col2:
     st.markdown("""
     <div class="info-card">
         <h4>Live reconciliation overview</h4>
