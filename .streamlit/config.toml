@@ -1,0 +1,9 @@
+[theme]
+# CARRR's design is a light theme. Pinning it stops Streamlit switching to a dark
+# theme on phones/browsers in dark mode, which made step headers (Check, Reconcile, ...)
+# render as light text on the light CARRR background.
+base = "light"
+primaryColor = "#5a63a8"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f6f5f8"
+textColor = "#17213d"

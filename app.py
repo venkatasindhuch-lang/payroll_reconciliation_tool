@@ -60,9 +60,22 @@ st.markdown(
     """
     <style>
     * {box-sizing:border-box}
+    :root,html,body{color-scheme:light}
     .stApp{background:linear-gradient(180deg,#f8fbff 0%,#ffffff 38%,#fbf9ff 100%);color:#17213d}
     .block-container{padding-top:2.1rem;padding-bottom:3rem;max-width:1180px}
     h1,h2,h3{letter-spacing:-.025em}
+    /* Dark-mode fix: the CARRR design is light, so pin Streamlit's own text to dark navy.
+       Otherwise phones in dark mode render step headers/labels white on the light page (looks blank). */
+    .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp h5,.stApp h6,
+    .stApp [data-testid="stHeading"],.stApp [data-testid="stHeading"] *,
+    .stApp [data-testid="stMarkdownContainer"] p,.stApp [data-testid="stMarkdownContainer"] li,
+    .stApp [data-testid="stMarkdownContainer"] strong,
+    .stApp [data-testid="stWidgetLabel"],.stApp [data-testid="stWidgetLabel"] *,
+    .stApp [data-testid="stMetricLabel"],.stApp [data-testid="stMetricValue"],
+    .stApp [data-testid="stExpander"] summary,.stApp [data-testid="stExpander"] summary *,
+    .stApp [data-testid="stTabs"] button,.stApp [data-testid="stRadio"] label,
+    .stApp [data-testid="stCheckbox"] label{color:#17213d}
+    .stApp [data-testid="stCaptionContainer"],.stApp [data-testid="stCaptionContainer"] *{color:#5f6480}
     .carrr-head{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;padding:1.15rem 1.3rem;border:1px solid #e9e8f4;border-radius:22px;background:rgba(255,255,255,.92);box-shadow:0 12px 32px rgba(41,52,94,.06);margin-bottom:1rem}
     .carrr-brand{font-size:1.9rem;font-weight:850;color:#141d4c}.carrr-tag{font-size:.95rem;font-weight:750;color:#5a63a8;margin-top:.15rem}.carrr-sub{color:#71758b;font-size:.88rem;margin-top:.25rem}
     .phasebar{display:grid;grid-template-columns:.85fr 1fr .7fr 1fr .8fr;gap:.5rem;margin:.8rem 0 1.2rem}
