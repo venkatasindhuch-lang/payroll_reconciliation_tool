@@ -70,6 +70,17 @@ This application is a demonstration and portfolio project. Always use fictional,
 This project is a **reconciliation and portfolio tool**, not payroll calculation or tax advice software.  
 Real payroll systems should use validated payroll rules, secure controls, authorised access and appropriate data-protection practices.
 
+## Running the tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+The tests run CARRR's checks on the 500-employee sample files in `tests/data` and compare the result with an
+independent calculation, then run the whole app script with a stand-in for Streamlit. They do not check layout or
+colours, so look at the app on a phone after changing the styling.
+
 ## Tech stack
 
 - Python
