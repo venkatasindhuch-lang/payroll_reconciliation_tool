@@ -1,5 +1,6 @@
 import io
 import re
+import hashlib
 import unicodedata
 from difflib import SequenceMatcher
 from datetime import date
@@ -51,8 +52,18 @@ st.set_page_config(page_title="CARRR Payroll", page_icon="✅", layout="wide")
 # -----------------------------
 RECON_FIELDS = [
     "Gross Pay", "Salary", "PAYE", "Employee NI", "Pension",
-    "Other Deductions", "Net Pay", "Overtime", "Overtime Pay", "Bonus"
+    "Other Deductions", "Net Pay", "Overtime", "Overtime Hours", "Overtime Pay", "Bonus"
 ]
+# Master-data fields are compared as text between the expected input and the pre-release output.
+# A change here (e.g. a different tax code, or a bank detail that has gone blank) is a payroll
+# exception even though no pay value moved.
+MASTER_FIELDS = [
+    "Tax Code", "NI Number", "Bank Details", "Sort Code", "Account Number",
+    "Employment Status", "Starter/Leaver",
+]
+# Bank fields are masked (last four characters only) wherever old/new values are displayed.
+MASKED_FIELDS = {"Bank Details", "Sort Code", "Account Number"}
+FOOTING_TOLERANCE = 0.02
 REQUIRED_KEYS = ["Employee ID", "Employee Name"]
 
 # CARRR Control Centre styling
@@ -1631,7 +1642,65 @@ def add_issue(rows, severity, check_name, detail, emp_id="", emp_name="", source
     })
 
 
-def check_payroll(df, label):
+def check_footing(df, tolerance=FOOTING_TOLERANCE):
+    """Warn when a row's own figures do not add up.
+
+    Gross = Salary + Overtime Pay + Bonus, and Net = Gross - PAYE - Employee NI - Pension - Other Deductions.
+    These are Warnings (not Fails): payroll files that carry extra earnings or deduction columns that CARRR
+    does not see (student loan, benefits, allowances...) can legitimately fail to foot, so the check can be
+    switched off in the thresholds panel. Each check only runs when the columns it needs are present.
+    """
+    rows = []
+    issue_columns = ["Source", "Status", "Employee ID", "Employee Name", "Check / Issue", "Detail"]
+    if "Employee ID" not in df.columns:
+        return pd.DataFrame(rows, columns=issue_columns)
+    ids = safe_text(df["Employee ID"])
+    names = employee_name(df)
+    cols = set(df.columns)
+    zero = pd.Series(0.0, index=df.index)
+
+    def col_or_zero(name):
+        return numeric(df[name]) if name in cols else zero
+
+    # Gross pay = salary + overtime + bonus
+    if "Gross Pay" in cols and "Salary" in cols:
+        ot_name = "Overtime Pay" if "Overtime Pay" in cols else ("Overtime" if "Overtime" in cols else None)
+        salary = numeric(df["Salary"])
+        overtime = col_or_zero(ot_name) if ot_name else zero
+        bonus = col_or_zero("Bonus")
+        gross = numeric(df["Gross Pay"])
+        built = (salary + overtime + bonus).round(2)
+        gap = (gross - built).round(2)
+        for idx in df.index[gap.abs().gt(tolerance)]:
+            add_issue(
+                rows, "Warning", "Gross pay does not add up",
+                f"Salary {salary.loc[idx]:,.2f} + {ot_name or 'Overtime'} {overtime.loc[idx]:,.2f} + Bonus {bonus.loc[idx]:,.2f} "
+                f"= {built.loc[idx]:,.2f}, but Gross Pay is {gross.loc[idx]:,.2f} ({gap.loc[idx]:+,.2f}).",
+                ids.loc[idx], names.loc[idx], "CHECK",
+            )
+
+    # Net pay = gross - deductions
+    if {"Gross Pay", "Net Pay", "PAYE", "Employee NI"} <= cols:
+        gross = numeric(df["Gross Pay"])
+        paye = numeric(df["PAYE"])
+        ni = numeric(df["Employee NI"])
+        pension = col_or_zero("Pension")
+        other = col_or_zero("Other Deductions")
+        net = numeric(df["Net Pay"])
+        built = (gross - paye - ni - pension - other).round(2)
+        gap = (net - built).round(2)
+        for idx in df.index[gap.abs().gt(tolerance)]:
+            add_issue(
+                rows, "Warning", "Net pay does not add up",
+                f"Gross {gross.loc[idx]:,.2f} - PAYE {paye.loc[idx]:,.2f} - NI {ni.loc[idx]:,.2f} - Pension {pension.loc[idx]:,.2f} "
+                f"- Other {other.loc[idx]:,.2f} = {built.loc[idx]:,.2f}, but Net Pay is {net.loc[idx]:,.2f} ({gap.loc[idx]:+,.2f}).",
+                ids.loc[idx], names.loc[idx], "CHECK",
+            )
+
+    return pd.DataFrame(rows, columns=issue_columns)
+
+
+def check_payroll(df, label, footing=True):
     rows = []
     names = employee_name(df)
 
@@ -1688,6 +1757,10 @@ def check_payroll(df, label):
             bad = raw.isna() & safe_text(df[col]).ne("")
             for idx in df.index[bad]:
                 add_issue(rows, "Fail", f"Invalid {col}", f"{col} is not numeric.", ids.loc[idx], names.loc[idx], "CHECK")
+
+    # Does each row's own arithmetic hold? (gross = salary + overtime + bonus; net = gross - deductions)
+    if footing:
+        rows.extend(check_footing(df).to_dict("records"))
 
     if not rows:
         add_issue(rows, "Pass", f"{label}: validation", "No validation issues detected in the supplied columns.", source="CHECK")
@@ -1876,27 +1949,72 @@ def validate_reconciliation_columns(df, label, fields):
     return errors
 
 
-def build_exception_reason(row, fields):
+_BLANK_TOKENS = {"NAN", "NONE", "<NA>", "NAT"}
+
+
+def _compact_text(series, collapse_only=False, blank_tokens=True):
+    """Normalise text for comparison: case, spacing and (for codes) hyphens are ignored."""
+    s = series.fillna("").astype(str).str.strip().str.upper()
+    if collapse_only:
+        s = s.str.replace(r"\s+", " ", regex=True)
+    else:
+        s = s.str.replace(r"[\s\-]+", "", regex=True)
+        # Excel can hand back 12345678.0 for a numeric account number.
+        s = s.str.replace(r"^(\d+)\.0+$", r"\1", regex=True)
+    if blank_tokens:
+        s = s.where(~s.isin(_BLANK_TOKENS), "")
+    return s
+
+
+def _display_value(field, raw):
+    """Value as shown to the reviewer: '(blank)' for empty, bank fields masked to the last 4."""
+    try:
+        is_blank = raw is None or bool(pd.isna(raw))
+    except (TypeError, ValueError):
+        is_blank = False
+    text = "" if is_blank else str(raw).strip()
+    if text == "" or text.upper() in _BLANK_TOKENS:
+        return "(blank)"
+    if field in MASKED_FIELDS:
+        return "…" + text[-4:]
+    return text
+
+
+def build_exception_reason(row, fields, text_fields=None):
+    status = row["Record Status"]
+    # A missing/unexpected employee is one exception; listing every field as "mismatch" is just noise.
+    # The amounts are still shown in the detail table, control totals and Net Pay Difference.
+    if status == "Missing from processed payroll":
+        return "Missing from processed payroll"
+    if status == "Unexpected employee in processed payroll":
+        return "Unexpected employee in processed payroll"
     reasons = []
-    if row["Record Status"] == "Missing from processed payroll":
-        reasons.append("Missing from processed payroll")
-    elif row["Record Status"] == "Unexpected employee in processed payroll":
-        reasons.append("Unexpected employee in processed payroll")
     for field in fields:
         if row.get(f"{field} Status") == "Mismatch":
             diff = row.get(f"{field} Difference", 0)
             reasons.append(f"{field} mismatch ({diff:+,.2f})")
+    for field in ["Employee Name"] + list(text_fields or []):
+        if row.get(f"{field} Status") == "Changed":
+            old = _display_value(field, row.get(f"{field} Expected"))
+            new = _display_value(field, row.get(f"{field} Processed"))
+            reasons.append(f"{field} changed: {old} → {new}")
     return "; ".join(reasons) if reasons else "No exception"
 
 
-def reconcile(expected, processed, fields, tolerance):
+def reconcile(expected, processed, fields, tolerance, text_fields=None):
+    text_fields = [
+        f for f in (text_fields or [])
+        if f in expected.columns and f in processed.columns
+        and f not in fields and f not in REQUIRED_KEYS
+    ]
     expected = expected.copy()
     processed = processed.copy()
     expected["Employee ID"] = safe_text(expected["Employee ID"])
     processed["Employee ID"] = safe_text(processed["Employee ID"])
 
-    expected = expected[["Employee ID", "Employee Name"] + fields]
-    processed = processed[["Employee ID", "Employee Name"] + fields]
+    keep = ["Employee ID", "Employee Name"] + fields + text_fields
+    expected = expected[keep]
+    processed = processed[keep]
 
     expected = expected.rename(columns={c: f"{c} Expected" for c in expected.columns if c != "Employee ID"})
     processed = processed.rename(columns={c: f"{c} Processed" for c in processed.columns if c != "Employee ID"})
@@ -1921,16 +2039,41 @@ def reconcile(expected, processed, fields, tolerance):
         "right_only": "Unexpected employee in processed payroll",
         "both": "Present in both",
     })
+    # Master data (and the employee name) compared as text, for employees present in both files only.
+    # Missing/unexpected employees are already exceptions in their own right.
+    in_both = merged["_merge"] == "both"
+    text_status_cols = []
+    for field in ["Employee Name"] + text_fields:
+        exp_col = f"{field} Expected"
+        proc_col = f"{field} Processed"
+        status_col = f"{field} Status"
+        is_name = field == "Employee Name"
+        changed = _compact_text(merged[exp_col], collapse_only=is_name, blank_tokens=not is_name).ne(
+            _compact_text(merged[proc_col], collapse_only=is_name, blank_tokens=not is_name)
+        )
+        merged[status_col] = "OK"
+        merged.loc[in_both & changed, status_col] = "Changed"
+        text_status_cols.append(status_col)
+
+    # Counts only describe employees present in both files; a missing/unexpected employee has nothing to compare.
+    merged["Value Mismatches"] = merged[status_cols].eq("Mismatch").sum(axis=1).astype(int).where(in_both, 0)
+    merged["Master Data Changes"] = merged[text_status_cols].eq("Changed").sum(axis=1).astype(int).where(in_both, 0)
+
     merged["Overall Status"] = "OK"
     merged.loc[merged["_merge"] != "both", "Overall Status"] = "Exception"
-    merged.loc[merged[status_cols].eq("Mismatch").any(axis=1), "Overall Status"] = "Exception"
-    merged["Exception Reason"] = merged.apply(lambda r: build_exception_reason(r, fields), axis=1)
+    merged.loc[(merged["Value Mismatches"] > 0) | (merged["Master Data Changes"] > 0), "Overall Status"] = "Exception"
+    merged["Exception Reason"] = merged.apply(lambda r: build_exception_reason(r, fields, text_fields), axis=1)
 
     ordered = [
-        "Employee ID", "Employee Name", "Record Status", "Overall Status", "Exception Reason"
+        "Employee ID", "Employee Name", "Record Status", "Overall Status", "Exception Reason",
+        "Value Mismatches", "Master Data Changes",
     ] + [
         col for field in fields for col in (
             f"{field} Expected", f"{field} Processed", f"{field} Difference", f"{field} Status"
+        )
+    ] + [
+        col for field in ["Employee Name"] + text_fields for col in (
+            f"{field} Expected", f"{field} Processed", f"{field} Status"
         )
     ]
     return merged[ordered]
@@ -1954,12 +2097,19 @@ def reconciliation_review_items(result):
     rows = []
     exceptions = result[result["Overall Status"].eq("Exception")]
     for _, r in exceptions.iterrows():
+        issue = "Reconciliation exception"
+        if (
+            r.get("Record Status") == "Present in both"
+            and r.get("Master Data Changes", 0) > 0
+            and r.get("Value Mismatches", 0) == 0
+        ):
+            issue = "Master data changed"
         rows.append({
             "Source": "RECONCILE",
             "Status": "Fail",
             "Employee ID": r.get("Employee ID", ""),
             "Employee Name": r.get("Employee Name", ""),
-            "Check / Issue": "Reconciliation exception",
+            "Check / Issue": issue,
             "Detail": r.get("Exception Reason", ""),
         })
     if not rows:
@@ -1994,6 +2144,106 @@ def control_coverage(expected, processed):
             "Coverage": "Available" if exp_cols and proc_cols else "Partial / Missing",
         })
     return pd.DataFrame(rows)
+
+def _item_keys(df):
+    if df is None or df.empty:
+        return []
+    return list(zip(df["Employee ID"].astype(str), df["Check / Issue"].astype(str), df["Detail"].astype(str)))
+
+
+def separate_new_output_items(output_items, input_items, reconciliation=None):
+    """Split output-side warnings into (new, already_on_input, shown_as_master_data_change).
+
+    - already_on_input: the identical warning (same employee, issue and detail) was already raised on the
+      expected input, so repeating it only adds work for the reviewer.
+    - shown_as_master_data_change: a "Missing <field>" warning for an employee whose <field> is already
+      reported as a change (old value -> new value) by the reconciliation.
+    Only the first group of items is genuinely new information about the pre-release output.
+    """
+    if output_items is None or output_items.empty:
+        blank = pd.DataFrame(columns=getattr(output_items, "columns", []))
+        return blank.copy(), blank.copy(), blank.copy()
+
+    seen = set(_item_keys(input_items))
+    repeated = pd.Series([k in seen for k in _item_keys(output_items)], index=output_items.index)
+
+    covered = pd.Series(False, index=output_items.index)
+    if reconciliation is not None and not reconciliation.empty:
+        changed_by_field = {}
+        for col in reconciliation.columns:
+            if col.endswith(" Status") and reconciliation[col].eq("Changed").any():
+                field = col[: -len(" Status")]
+                changed_by_field[field] = set(
+                    reconciliation.loc[reconciliation[col].eq("Changed"), "Employee ID"].astype(str)
+                )
+        for idx, row in output_items.iterrows():
+            issue = str(row["Check / Issue"])
+            if issue.startswith("Missing "):
+                field = issue[len("Missing "):]
+                if str(row["Employee ID"]) in changed_by_field.get(field, set()):
+                    covered.loc[idx] = True
+    covered = covered & ~repeated
+
+    new_items = output_items[~repeated & ~covered].copy()
+    return new_items, output_items[repeated].copy(), output_items[covered].copy()
+
+
+REVIEW_DEFAULTS = (False, "Open", "")
+
+
+def review_item_key(row):
+    """Stable identity of a review item, so decisions survive a rerun of the app."""
+    return "||".join(str(row.get(c, "")) for c in ("Source", "Employee ID", "Check / Issue", "Detail"))
+
+
+def snapshot_decisions(review_df):
+    """Record every row that a reviewer has changed from the default Open/unreviewed state."""
+    decisions = {}
+    for _, row in review_df.iterrows():
+        state = (bool(row["Reviewed"]), str(row["Review Status"]), str(row["Reviewer Note"] or ""))
+        if state != REVIEW_DEFAULTS:
+            decisions[review_item_key(row)] = {
+                "Reviewed": state[0], "Review Status": state[1], "Reviewer Note": state[2],
+            }
+    return decisions
+
+
+def apply_saved_decisions(review_df, decisions):
+    out = review_df.copy()
+    if out.empty or not decisions:
+        return out
+    for idx, row in out.iterrows():
+        saved = decisions.get(review_item_key(row))
+        if saved:
+            out.at[idx, "Reviewed"] = bool(saved["Reviewed"])
+            out.at[idx, "Review Status"] = saved["Review Status"]
+            out.at[idx, "Reviewer Note"] = saved["Reviewer Note"]
+    return out
+
+
+def apply_bulk_decision(review_df, mask, status, note):
+    """Resolve or accept many review items at once, always with a reviewer note.
+
+    Failed checks and payroll mismatches can never be bulk-decided: they must be reviewed one by one.
+    """
+    if status not in ("Resolved", "Accepted"):
+        raise ValueError("Choose Resolved or Accepted.")
+    note = (note or "").strip()
+    if not note:
+        raise ValueError("A reviewer note is required for a bulk decision.")
+    out = review_df.copy()
+    mask = pd.Series(mask, index=out.index).fillna(False).astype(bool)
+    if not mask.any():
+        raise ValueError("No open items match the selection.")
+    blocked = out.loc[mask, "Status"].astype(str).eq("Fail") | out.loc[mask, "Source"].astype(str).eq("RECONCILE")
+    if blocked.any():
+        raise ValueError("Failed checks and payroll mismatches must be reviewed individually, not in bulk.")
+    out.loc[mask, "Reviewed"] = True
+    out.loc[mask, "Review Status"] = status
+    existing = out.loc[mask, "Reviewer Note"].fillna("").astype(str).str.strip()
+    out.loc[mask, "Reviewer Note"] = existing.where(existing.eq(""), existing + " | ") + note
+    return out
+
 
 def build_review_queue(check_df, analysis_df, recon_df):
     queue = pd.concat([check_df, analysis_df, recon_df], ignore_index=True)
@@ -2161,13 +2411,19 @@ with st.expander("Preview CARRR standardised payroll input", expanded=False):
     st.dataframe(expected.head(50),use_container_width=True,hide_index=True)
 
 st.markdown('<div class="before-box"><div class="kicker">Before payroll</div><div class="bigline">2. Check + Analyse the verified input</div><div class="muted">CARRR now checks the standardised payroll input and surfaces only the records that need attention.</div></div>',unsafe_allow_html=True)
-with st.expander("Before-payroll thresholds", expanded=False):
+with st.expander("Before-payroll thresholds and checks", expanded=False):
     t1,t2,t3=st.columns(3)
     overtime_limit=t1.number_input("High overtime pay (£)",min_value=0.0,value=500.0,step=50.0)
     overtime_hours_limit=t2.number_input("High overtime hours",min_value=0.0,value=20.0,step=1.0)
     bonus_limit=t3.number_input("High bonus (£)",min_value=0.0,value=1000.0,step=100.0)
+    footing_on=st.checkbox(
+        "Check that gross and net pay add up on every row",
+        value=True,
+        help="Gross = salary + overtime + bonus. Net = gross - PAYE - NI - pension - other deductions. "
+             "Turn this off if your files carry other earnings or deductions (student loan, benefits...) that are not in the columns CARRR sees.",
+    )
 
-check_input=check_payroll(expected,"Payroll input")
+check_input=check_payroll(expected,"Payroll input",footing=footing_on)
 analysis_input=analyse_input_payroll(expected,overtime_limit,overtime_hours_limit,bonus_limit)
 before_items=pd.concat([attention_only(check_input),attention_only(analysis_input)],ignore_index=True)
 
@@ -2273,10 +2529,16 @@ if not common_fields:
     st.error("The two files do not share a supported payroll value such as Gross Pay, PAYE, Pension or Net Pay.")
     st.stop()
 
+master_common=[f for f in MASTER_FIELDS if f in expected.columns and f in processed.columns]
+
 with st.expander("Reconciliation settings",expanded=False):
     s1,s2=st.columns(2)
     fields=s1.multiselect("Fields to compare",common_fields,default=common_fields)
     tolerance=s2.number_input("Allowed difference (£)",min_value=0.0,value=0.01,step=0.01)
+    text_fields=st.multiselect(
+        "Master data to compare (shown as old → new)",master_common,default=master_common,
+        help="Tax code, NI number, bank details and employment status are compared as text. A change is an exception even when no pay value moved.",
+    ) if master_common else []
 
 if not fields:
     st.warning("Select at least one field to compare.")
@@ -2288,11 +2550,17 @@ if errors:
     for e in errors: st.write("- "+e)
     st.stop()
 
-check_output=check_payroll(processed,"Pre-release output")
-reconciliation=reconcile(expected,processed,fields,tolerance)
+check_output=check_payroll(processed,"Pre-release output",footing=footing_on)
+reconciliation=reconcile(expected,processed,fields,tolerance,text_fields=text_fields)
 controls=control_totals(reconciliation,fields)
 recon_items=reconciliation_review_items(reconciliation)
-after_items=pd.concat([attention_only(check_output),attention_only(recon_items)],ignore_index=True)
+# Only warnings that are genuinely new on the output go to the reviewer. A warning already raised on the
+# input is not repeated, and a "Missing <field>" warning is dropped when the reconciliation already shows
+# that field changing (old → new).
+new_output_items,repeated_output_items,covered_output_items=separate_new_output_items(
+    attention_only(check_output),attention_only(check_input),reconciliation
+)
+after_items=pd.concat([new_output_items,attention_only(recon_items)],ignore_index=True)
 all_items=pd.concat([before_items,after_items],ignore_index=True)
 
 exceptions_count=int(reconciliation["Overall Status"].eq("Exception").sum())
@@ -2314,6 +2582,8 @@ if not mismatch_rows.empty:
             return "Missing employee/output"
         if row.get("Record Status") == "Unexpected employee in processed payroll":
             return "Unexpected employee/payment"
+        if row.get("Master Data Changes", 0) > 0 and row.get("Value Mismatches", 0) == 0:
+            return "Master data change"
         return "Payroll value mismatch"
 
     mismatch_summary = pd.DataFrame({
@@ -2327,11 +2597,17 @@ if not mismatch_rows.empty:
         "Missing employee/output": "Check payroll output / missing employee",
         "Unexpected employee/payment": "Verify employee and payment before release",
         "Payroll value mismatch": "Check source input and payroll calculation",
+        "Master data change": "Confirm the change was authorised before release",
     })
 else:
     mismatch_summary = pd.DataFrame(columns=["Employee ID","Employee Name","Mismatch Type","What changed","Net Pay Difference","Action"])
 
-other_after_warnings = attention_only(check_output)
+other_after_warnings = new_output_items
+not_repeated_note = (
+    f"{len(repeated_output_items)} output warning(s) were already raised on the input and are not repeated; "
+    f"{len(covered_output_items)} are shown as master-data changes (old → new) instead."
+    if (len(repeated_output_items) or len(covered_output_items)) else ""
+)
 
 st.markdown("### Fix First — Payroll Mismatches")
 if mismatch_summary.empty:
@@ -2366,6 +2642,20 @@ review_queue["Reviewed"]=False
 review_queue["Review Status"]="Open"
 review_queue["Reviewer Note"]=""
 
+# Review decisions are keyed to a fingerprint of the uploaded files, so decisions made on one set of files
+# can never be silently applied to a different upload in the same browser session.
+_review_source=(
+    tuple((f.name,getattr(f,"size",0)) for f in input_files),
+    (output_file.name,getattr(output_file,"size",0)),
+)
+review_fp=hashlib.md5(repr(_review_source).encode()).hexdigest()[:10]
+if st.session_state.get("carrr_review_fp")!=review_fp:
+    st.session_state["carrr_review_fp"]=review_fp
+    st.session_state["carrr_review_decisions"]={}
+    st.session_state["carrr_review_version"]=0
+review_version=st.session_state.get("carrr_review_version",0)
+review_queue=apply_saved_decisions(review_queue,st.session_state.get("carrr_review_decisions",{}))
+
 main_tab,mismatch_tab,warning_tab,detail_tab,review_tab,release_tab=st.tabs(["Overview","Fix First: Mismatches","Warnings","Reconciliation Detail","Review & Notes","Release Gate"])
 
 with main_tab:
@@ -2379,6 +2669,8 @@ with main_tab:
         "Start with Source Validation and Payroll mismatches. "
         "Warnings are secondary checks and can be reviewed afterwards."
     )
+    if not_repeated_note:
+        st.caption(not_repeated_note)
     with st.expander("Payroll control totals",expanded=False):
         shown=controls.copy()
         for col in ["Expected Total","Processed Total","Variance"]:
@@ -2398,6 +2690,8 @@ with mismatch_tab:
 with warning_tab:
     st.markdown("#### Warnings — review after payroll mismatches")
     st.caption("Warnings can include high overtime, missing master data, leaver payments or other threshold checks. They are separated from true reconciliation mismatches.")
+    if not_repeated_note:
+        st.caption(not_repeated_note)
     if before_items.empty and other_after_warnings.empty:
         st.success("No warnings found.")
     else:
@@ -2425,9 +2719,41 @@ with review_tab:
                 "Reviewed":st.column_config.CheckboxColumn("Reviewed"),
                 "Review Status":st.column_config.SelectboxColumn("Outcome",options=["Open","Resolved","Accepted"],required=True),
                 "Reviewer Note":st.column_config.TextColumn("Reviewer Note"),
-            },key="carrr_v2_review")
+            },key=f"carrr_v2_review_{review_fp}_{review_version}")
         open_items=review_editor[(~review_editor["Reviewed"])|review_editor["Review Status"].eq("Open")]
         st.metric("Total review items still open",len(open_items))
+
+        with st.expander("Bulk actions — resolve or accept many warnings at once",expanded=False):
+            st.caption(
+                "For routine warnings only, such as high-overtime warnings you have already checked. "
+                "Failed checks and payroll mismatches must still be reviewed one by one. "
+                "A reviewer note is required and is saved against every item."
+            )
+            _reviewed=review_editor["Reviewed"].fillna(False).astype(bool)
+            _open=(~_reviewed)|review_editor["Review Status"].eq("Open")
+            _bulk_ok=_open & review_editor["Status"].eq("Warning") & ~review_editor["Source"].eq("RECONCILE")
+            warn_open=review_editor[_bulk_ok]
+            if warn_open.empty:
+                st.info("No open warnings to decide in bulk.")
+            else:
+                issue_counts=warn_open["Check / Issue"].value_counts()
+                chosen=st.multiselect(
+                    "Warning types",list(issue_counts.index),
+                    format_func=lambda issue:f"{issue} ({issue_counts[issue]})",
+                )
+                b1,b2=st.columns(2)
+                bulk_status=b1.selectbox("Outcome",["Accepted","Resolved"])
+                bulk_note=b2.text_input("Reviewer note (required)")
+                chosen_mask=_bulk_ok & review_editor["Check / Issue"].isin(chosen)
+                if st.button(f"Apply to {int(chosen_mask.sum())} open warning(s)",disabled=not chosen_mask.any()):
+                    try:
+                        updated_review=apply_bulk_decision(review_editor,chosen_mask,bulk_status,bulk_note)
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state["carrr_review_decisions"]=snapshot_decisions(updated_review)
+                        st.session_state["carrr_review_version"]=review_version+1
+                        st.rerun()
 
 with release_tab:
     st.markdown("#### CARRR Release Gate")
@@ -2617,6 +2943,8 @@ with release_tab:
         {"Metric":"Source Missing IDs","Value":source_validation["Missing IDs"]},
         {"Metric":"Source Unexpected IDs","Value":source_validation["Unexpected IDs"]},
         {"Metric":"Source Duplicate Output IDs","Value":source_validation["Duplicate Output ID Rows"]},
+        {"Metric":"Output Warnings Already Raised On Input","Value":len(repeated_output_items)},
+        {"Metric":"Output Warnings Shown As Master Data Changes","Value":len(covered_output_items)},
         {"Metric":"Source Population Aligned","Value":"Yes" if source_population_aligned else "No"},
         {"Metric":"CARRR Controls Clear","Value":"Yes" if controls_clear else "No"},
         {"Metric":"Final Decision","Value":decision},
